@@ -33,6 +33,8 @@ export interface ToolStore {
   lastSeq(): number;
   /** Performs (local) or forwards (cloud) a write; returns what happened. */
   act(op: WriteOp): Promise<Record<string, unknown>>;
+  /** The owner's notes, on a machine that has them (only the chat brain offers this; notes never reach the Worker). */
+  kbSearch?(query: string, limit: number): unknown[];
 }
 
 export const TASK_STATES = ["inbox", "active", "waiting", "blocked", "failed", "done"] as const;
@@ -256,6 +258,9 @@ export const TOOLS: Tool[] = [
   { name: "search_journal", title: "Search the journal", annotations: RO,
     inputSchema: obj({ query: str("Words that must all appear in the line"), days: int("How many recent days (default 14, max 60)", { minimum: 1, maximum: 60 }) }, ["query"]),
     description: "Search the fleet's daily journal (what every machine did: tasks started/finished, decisions, deploys), newest first." },
+  { name: "search_kb", title: "Search the owner's notes", annotations: RO, only: "brain",
+    inputSchema: obj({ query: str("Words separated by spaces"), limit: int("Max results (default 5, max 10)", { minimum: 1, maximum: 10 }) }, ["query"]),
+    description: "Search the owner's personal knowledge base (their SiYuan notes). Returns titles, snippets and siyuan:// links. Answers from it may quote only short passages." },
   { name: "search", title: "Search", annotations: RO, inputSchema: obj({ query: str("What to look for") }, ["query"]),
     description: "Search Noop tasks and decisions. Returns {results:[{id, title, url}]}; use fetch with an id for the full text." },
   { name: "fetch", title: "Fetch", annotations: RO, inputSchema: obj({ id: str("An id from search: a task (T-…) or decision (D-…)") }, ["id"]),
@@ -400,6 +405,12 @@ export async function runTool(st: ToolStore, name: string, a: any, base = ""): P
       const q = s(a.query);
       if (!q) return bad("query required");
       return ok({ lines: searchJournal(st, q, Math.max(1, Math.min(Number(a.days) || 14, 60))) });
+    }
+    case "search_kb": {
+      const q = s(a.query);
+      if (!q) return bad("query required");
+      if (!st.kbSearch) return bad("this machine has no knowledge base; hand the question to the tutor with create_task");
+      return ok({ results: st.kbSearch(q, Math.max(1, Math.min(Number(a.limit) || 5, 10))) });
     }
     case "search": {
       const q = s(a.query);

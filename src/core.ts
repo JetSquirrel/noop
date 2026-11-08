@@ -5,9 +5,22 @@ import { homedir, hostname } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import * as sync from "./sync";
 import { BUILTIN_ROUTINES } from "./builtin-routines";
+import { kbConfig } from "./kb";
 
 /** Framework code (this repo, self-updating). */
 export const CODE = resolve(import.meta.dir, "..");
+let bashExe: string | undefined;
+/** The bash for user shell commands. On Windows a bare `bash` can be System32's WSL launcher, which can't see Windows paths, so use Git's. */
+export function bashPath(): string {
+  if (bashExe) return bashExe;
+  bashExe = "bash";
+  if (process.platform === "win32") {
+    const exec = Bun.spawnSync(["git", "--exec-path"], { stdout: "pipe", stderr: "ignore" }).stdout.toString().trim(); // <git>/mingw64/libexec/git-core
+    const git = exec && resolve(exec, "../../../bin/bash.exe");
+    if (git && existsSync(git)) bashExe = git;
+  }
+  return bashExe;
+}
 /** Machine-local home: $NOOP_HOME, else ~/.noop if it exists, else ~/.noop (older installs) if it exists, else ~/.noop. */
 export function homeDir(): string {
   if (process.env.NOOP_HOME) return resolve(process.env.NOOP_HOME.replace(/^~/, homedir()));
@@ -171,7 +184,7 @@ export type TaskOpts = {
 export function hostCaps(cfg: Cfg): string[] {
   const os = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux";
   const clis = ["claude", "codex", "gh", "cargo", "bun", "node"].filter((c) => Bun.which(c)).map((c) => `cli:${c}`);
-  return [`os:${os}`, `host:${hostName(cfg)}`, `arch:${process.arch}`, ...clis, ...(cfg.host?.caps ?? [])];
+  return [`os:${os}`, `host:${hostName(cfg)}`, `arch:${process.arch}`, ...clis, ...(kbConfig(cfg) ? ["kb"] : []), ...(cfg.host?.caps ?? [])];
 }
 
 /** One requirement; "a|b" means either cap will do (e.g. cli:bun|cli:node). */

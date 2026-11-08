@@ -36,6 +36,9 @@
 | `src/notify.ts`, `src/server.ts`, `src/cloud.ts` | events, local API, Worker bridge and deploy |
 | `src/medic.ts` | AI self-repair for install/update/daemon failures |
 | `src/sessions.ts` | learning the owner from local Claude/Codex history (redacted, never uploaded raw) |
+| `src/kb.ts` | the owner's SiYuan notes as a local, read-only knowledge base (`~/.noop/kb`, never synced) |
+| `src/study.ts`, `app/study.ts` | lessons from the tutor agent, written to `reports/study/`; see [knowledge-and-study.md](knowledge-and-study.md) |
+| `src/diagnose.ts` | `noop doctor` connection and service checks, `noop primary` |
 | `src/setup.ts` | init, join, install as a service, self-update with rollback |
 | `cloud/` | the Worker: `index.ts` (routes, auth, feed), `files.ts`, `smtp.ts`, `push.ts` |
 | `app/` | the NSH client; machines download the web package from the latest release (`src/webclient.ts`), and `app/build-web.sh` builds it locally |

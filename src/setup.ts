@@ -2,7 +2,7 @@
 import { $ } from "bun";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { CODE, DATA, P } from "./core";
 
 const STATE_DIRS = [
@@ -34,11 +34,19 @@ async function joinViaLogin(url: string, host: string): Promise<string | null> {
   if (!email) return null;
   const s = await post("/api/auth/start", { email });
   if (!s.ok) { console.error(`login failed (${s.status}): ${s.json?.error ?? ""}`); return null; }
-  const code = (prompt("code from the email:") ?? "").trim();
-  const v = await post("/api/auth/verify", { email, code });
-  if (!v.ok || !v.json?.session) { console.error(`verification failed (${v.status}): ${v.json?.error ?? ""}`); return null; }
-  const j = await post("/api/host/join", { host }, v.json.session);
-  await post("/api/auth/logout", {}, v.json.session); // the session was only needed to mint the machine token
+  const code = (prompt("code from the email (8 characters):") ?? "").trim();
+  let session = "";
+  for (let tries = 0; tries < 3 && !session; tries++) {
+    // asked last and on every try: it changes every 30 seconds, each one works once, and a wrong one leaves the email code valid
+    const totp = (prompt("code from your authenticator app (6 digits):") ?? "").replace(/\s/g, "");
+    const v = await post("/api/auth/verify", { email, code, totp });
+    if (v.ok && v.json?.session) { session = v.json.session; break; }
+    console.error(`verification failed (${v.status}): ${v.json?.error ?? ""}`);
+    if (v.status !== 401 || !String(v.json?.error ?? "").includes("两步验证码")) return null;
+  }
+  if (!session) return null;
+  const j = await post("/api/host/join", { host }, session);
+  await post("/api/auth/logout", {}, session); // the session was only needed to mint the machine token
   if (!j.ok || !j.json?.token) { console.error(`join failed (${j.status}): ${j.json?.error ?? ""}; or use: noop init ${url} --token <machine-token>`); return null; }
   return String(j.json.token);
 }
@@ -57,7 +65,7 @@ export async function init(opts: { worker?: string; token?: string; primary?: bo
     const url = (opts.worker || joined || (prompt("your noop URL (e.g. https://noop.example.com; set up the first machine with --primary):") ?? "")).trim().replace(/\/$/, "");
     if (!url) { console.error("no noop URL: run init <noop-url>, or init --primary on the machine that hosts it"); process.exitCode = 1; return; }
     const token = opts.token ?? (url === joined ? readHubToml().server?.token : undefined) ?? await joinViaLogin(url, me);
-    if (!token) return;
+    if (!token) { process.exitCode = 1; return; }
     writeHubToml({ cloud: { url }, server: { token } });
     if (!(await pull())) { console.error(`could not sync from ${url} (check the URL / token)`); process.exitCode = 1; return; }
     writeLocalConfig(me);
@@ -200,8 +208,25 @@ WantedBy=default.target
     console.log(`✔ launchd agent installed: ${plist} (caffeinate -i keeps it awake while plugged in; when the lid closes the fleet simply continues without this Mac)`);
   } else if (process.platform === "win32") {
     const cmd = `"${bun}" "${cli}" daemon`;
-    await $`schtasks /Create /F /SC ONLOGON /RL LIMITED /TN ${SERVICE} /TR ${cmd}`.nothrow();
-    await $`schtasks /Run /TN ${SERVICE}`.nothrow();
-    console.log("✔ Scheduled Task '${SERVICE}' installed (runs at logon, restarts with the daemon's own loop). Disable sleep: powercfg /change standby-timeout-ac 0");
+    const created = await $`schtasks /Create /F /SC ONLOGON /RL LIMITED /TN ${SERVICE} /TR ${cmd}`.quiet().nothrow();
+    if (created.exitCode === 0) {
+      const started = await $`schtasks /Run /TN ${SERVICE}`.quiet().nothrow();
+      if (started.exitCode !== 0) { console.error(`the Scheduled Task '${SERVICE}' was created but did not start: ${started.stderr.toString().trim()}`); process.exitCode = 1; return; }
+      console.log(`✔ Scheduled Task '${SERVICE}' installed (runs at logon). Disable sleep: powercfg /change standby-timeout-ac 0`);
+      return;
+    }
+    // a logon trigger needs an elevated shell; the user's Startup folder needs nothing, and this also covers a locked-down machine
+    const file = startupFile();
+    if (!file) { console.error(`could not install the service: ${created.stderr.toString().trim()}`); process.exitCode = 1; return; }
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, startupLauncher(bun, cli));
+    const running = Bun.spawnSync(["wscript.exe", file]);
+    if (running.exitCode !== 0) { console.error(`installed ${file}, but it did not start`); process.exitCode = 1; return; }
+    console.log(`✔ started, and it will start at logon from ${file} (no administrator rights needed). Disable sleep: powercfg /change standby-timeout-ac 0`);
   }
 }
+
+/** The per-user Startup launcher used when a Scheduled Task can't be created. */
+export const startupFile = () => process.env.APPDATA ? join(process.env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", `${SERVICE}.vbs`) : "";
+/** Starts the daemon with no window: `0` hides it, `False` returns at once. VBScript doubles quotes inside a string. */
+export const startupLauncher = (bun: string, cli: string) => `CreateObject("WScript.Shell").Run """${bun}"" ""${cli}"" daemon", 0, False\r\n`;

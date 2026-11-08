@@ -41,8 +41,7 @@ jobs:
           - { target: linux, os: ubuntu-24.04, asset: noop-linux-x86_64.tar.gz, installer: install-client.sh }
           - { target: windows, os: windows-latest, asset: noop-windows-x86_64.zip, installer: install-client.ps1 }
           - { target: macos, os: macos-15, asset: noop-macos-arm64.zip, installer: install-client.sh }
-          - { target: ios, os: xcode-27, asset: noop-ios-unsigned.ipa }
-          - { target: android, os: ubuntu-24.04, asset: noop-android.apk }
+          # This fork has no iOS runner or Android signing key; phones use the web client the Worker serves.
           - { target: web, os: ubuntu-24.04, asset: noop-web.tar.gz }
     runs-on: ${{ matrix.os }}
     steps:
@@ -209,6 +208,8 @@ jobs:
           NSH_PACKAGE_KEY: ${{ secrets.NSH_PACKAGE_KEY }}
           NSH_PACKAGE_CERT: ${{ secrets.NSH_PACKAGE_CERT }}
         run: |
+          # Without a release key, apps update by whole archive instead of by package.
+          if [ -z "$NSH_PACKAGE_KEY" ]; then echo "no NSH_PACKAGE_KEY: skipping the OTA package"; exit 0; fi
           version="${GITHUB_REF_NAME#v}"
           printf 'export const CLIENT_VERSION = "%s";\n' "$version" > app/version.ts
           keys="$RUNNER_TEMP/keys"
@@ -225,9 +226,10 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           jq --arg version "$version" '.version = $version' app/nsh.json > "$RUNNER_TEMP/nsh.json"
           mv "$RUNNER_TEMP/nsh.json" app/nsh.json
-          nsh update-manifest assets/noop-"$version"-*.tar.gz assets/noop-"$version"-*.zip --entry app --out assets \
-            --package assets/noop-"$version".nshpkg \
-            --link "android=https://github.com/$GITHUB_REPOSITORY/releases/latest/download/noop-android.apk"
+          extra=()
+          [ ! -f assets/noop-"$version".nshpkg ] || extra+=(--package assets/noop-"$version".nshpkg)
+          [ ! -f assets/noop-android.apk ] || extra+=(--link "android=https://github.com/$GITHUB_REPOSITORY/releases/latest/download/noop-android.apk")
+          nsh update-manifest assets/noop-"$version"-*.tar.gz assets/noop-"$version"-*.zip --entry app --out assets "${extra[@]}"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

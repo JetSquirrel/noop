@@ -134,6 +134,7 @@ import {
   type TaskInfo,
 } from "./hub";
 import { notificationFor, type NotifyRules } from "./notify";
+import { type Lesson, type QuizCard, type StudyItem, STUDY_DONE_KEY, STUDY_PREFIX, parseLesson, studyCommand, studyItems } from "./study";
 // Email sign-in code length (cloud/src/index.ts CODE_LEN): letters and digits, case-insensitive.
 const CODE_LEN = 8;
 
@@ -1883,6 +1884,8 @@ function Sidebar(props: {
   onSettings: () => void;
   rules: () => boolean;
   onRules: () => void;
+  study: () => boolean;
+  onStudy: () => void;
   tasks: () => boolean;
   onTasks: () => void;
   channels: Channels;
@@ -1971,6 +1974,10 @@ function Sidebar(props: {
             <SideRow onPress={props.onRules} selected={props.rules()} title={L("Memory", "记忆")}>
               <Icon name="scroll" size={17} tint={props.rules() ? colors.text : colors.muted} />
               <Text style={rowText()}>{L("Memory", "记忆")}</Text>
+            </SideRow>
+            <SideRow onPress={props.onStudy} selected={props.study()} title={L("Study", "学习")}>
+              <Icon name="document" size={17} tint={props.study() ? colors.text : colors.muted} />
+              <Text style={rowText()}>{L("Study", "学习")}</Text>
             </SideRow>
           </View>
           <SideHeading title={L("Needs your decision", "待你决定")} count={waits().length || undefined} accent />
@@ -3581,6 +3588,132 @@ function RuleDoc(props: { hub: Hub; path: string; wide: boolean }) {
   );
 }
 
+// ---------------------------------------------------------------- study: lessons from the tutor
+
+/** Which lessons this device has finished; shared so the list updates when a lesson is marked. */
+const studyDone = signal<string[]>([]);
+void Storage.getItem(STUDY_DONE_KEY).then((raw) => { try { const v = JSON.parse(raw ?? "[]"); if (Array.isArray(v)) studyDone.set(v); } catch {} });
+function toggleStudyDone(path: string) {
+  const next = untracked(studyDone).includes(path) ? untracked(studyDone).filter((p) => p !== path) : [...untracked(studyDone), path];
+  studyDone.set(next);
+  void Storage.setItem(STUDY_DONE_KEY, JSON.stringify(next));
+}
+
+const STUDY_MODE_CHOICES = () => [
+  { id: "auto", label: L("Let the tutor decide", "导师自己判断"), testID: "study-mode-auto" },
+  { id: "architecture", label: L("Architecture", "架构"), detail: L("Components, data flow, boundaries", "组件、数据流和边界"), testID: "study-mode-architecture" },
+  { id: "design", label: L("Design", "设计方案"), detail: L("Options, choices and trade-offs", "可选方案、决策和取舍"), testID: "study-mode-design" },
+  { id: "tech", label: L("Technical solution", "技术方案"), detail: L("Key mechanisms, traced through the code", "沿代码讲清关键机制"), testID: "study-mode-tech" },
+  { id: "activity", label: L("What the agents did", "Agent 做了什么"), detail: L("Tasks, journal and commits, and what to learn from them", "从任务、日志和提交里学习"), testID: "study-mode-activity" },
+];
+
+/** 学习: ask for a lesson, and the lessons so far. */
+function StudyList(props: { hub: Hub; onOpen: (path: string) => void }) {
+  const items = signal<StudyItem[] | null>(null);
+  const error = signal("");
+  const note = signal("");
+  const project = signal("");
+  const topic = signal("");
+  const mode = signal("auto");
+  const load = async () => {
+    error.set("");
+    const r = await props.hub.api("GET", `/api/files/list?prefix=${encodeURIComponent(STUDY_PREFIX)}`);
+    if (r.ok) items.set(studyItems((r.data.files as DataFile[] | undefined) ?? []));
+    else error.set(r.status ? L(`Couldn’t load (${r.status})`, `读取失败（${r.status}）`) : L("Can’t reach the server", "连不上服务器"));
+  };
+  void load();
+  const start = async () => {
+    const text = studyCommand({ topic: topic(), project: project(), mode: mode() });
+    if (!text) { note.set(L("Say what you want to learn, or which project.", "写下想学的内容，或者填一个项目。")); return; }
+    try {
+      await props.hub.send(text, null);
+      topic.set("");
+      note.set(L("Sent. The lesson appears here when the tutor finishes; you can refresh in a few minutes.", "已发送。导师写好后讲义会出现在这里，过几分钟刷新看看。"));
+    } catch (e) { note.set(String((e as Error)?.message ?? e)); }
+  };
+  return (
+    <Grouped testID="study">
+      <Text style={{ paddingHorizontal: 32, fontSize: 13, lineHeight: 18, color: colors.muted }}>{L("The tutor reads the code, the team’s history and your notes, then writes a lesson with a short self-test.", "导师会阅读代码、团队的工作记录和你的笔记，写成讲义并附带自测题。")}</Text>
+      <Section title={L("New lesson", "新的学习")}>
+        <View style={{ gap: 12, padding: 16 }}>
+          <Field label={L("Project (optional)", "项目（可选）")} value={project()} onChange={(v) => project.set(v)} placeholder="noop" testID="study-project" />
+          <Field label={L("What do you want to learn?", "想学什么？")} value={topic()} onChange={(v) => topic.set(v)} onSubmit={start} placeholder={L("How does file sync work?", "文件同步是怎么工作的？")} testID="study-topic" />
+        </View>
+      </Section>
+      <Section title={L("Angle", "角度")}>
+        <Choices label={L("Angle", "角度")} choices={STUDY_MODE_CHOICES()} selected={mode()} onPick={(id) => mode.set(id)} />
+      </Section>
+      <Section>
+        <SetRow first label={L("Start learning", "开始学习")} chevron onPress={() => void start()} testID="study-start" />
+      </Section>
+      <If when={note()}>
+        <Text testID="study-note" style={{ paddingHorizontal: 32, fontSize: 13, color: colors.muted }}>{note()}</Text>
+      </If>
+      <If when={items()} else={<Text style={{ paddingHorizontal: 32, fontSize: 14, color: error() ? colors.danger : colors.faint }}>{error() || L("Loading…", "读取中…")}</Text>}>
+        {(list) => (
+          <Section title={L("Lessons", "讲义")} testID="study-lessons">
+            <If when={list().length} else={<SetRow first label={L("No lessons yet", "还没有讲义")} disabled />}>
+              <Each of={list()} key={(it) => it.path}>
+                {(it, i) => <SetRow first={i() === 0} label={it().title} value={studyDone().includes(it().path) ? L("Finished", "已学完") : it().id} chevron onPress={() => props.onOpen(it().path)} testID={`lesson-${it().id || it().title}`} />}
+              </Each>
+            </If>
+            <SetRow label={L("Refresh", "刷新")} onPress={() => void load()} testID="study-refresh" />
+          </Section>
+        )}
+      </If>
+    </Grouped>
+  );
+}
+
+function QuizCardView(props: { card: QuizCard; index: number }) {
+  const open = signal(false);
+  return (
+    <View testID={`quiz-${props.index}`} style={{ gap: 8, padding: 14, borderRadius: radius.card, borderCurve: "continuous", borderWidth: 0.5, borderColor: surfaceEdge(), backgroundColor: colors.surface }}>
+      <View selectable><Rich text={`**${props.index + 1}.** ${props.card.q}`} /></View>
+      <If when={open()} else={
+        <View role="button" testID={`quiz-show-${props.index}`} accessibilityLabel={L("Show answer", "显示答案")} onPress={() => open.set(true)} hoverStyle={hovered()} style={{ alignSelf: "flex-start", paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6 }}>
+          <Text style={{ fontSize: 14, color: colors.info }}>{L("Think first, then show the answer", "想好后显示答案")}</Text>
+        </View>
+      }>
+        <View selectable testID={`quiz-answer-${props.index}`}><Rich text={props.card.a} muted /></View>
+      </If>
+    </View>
+  );
+}
+
+/** One lesson: the text, then its self-test with the answers hidden. */
+function StudyLesson(props: { hub: Hub; path: string; wide: boolean }) {
+  const lesson = signal<Lesson | null>(null);
+  const error = signal("");
+  void props.hub.api("GET", `/api/files/read?path=${encodeURIComponent(props.path)}`).then((r) => {
+    if (r.ok && typeof r.data.content === "string") lesson.set(parseLesson(r.data.content));
+    else error.set(r.status === 404 ? L("This lesson no longer exists.", "这份讲义已经不在了。") : r.status ? L(`Couldn’t load (${r.status})`, `读取失败（${r.status}）`) : L("Can’t reach the server", "连不上服务器"));
+  });
+  const finished = () => studyDone().includes(props.path);
+  return (
+    <Scroll testID="study-lesson" style={{ flex: 1, backgroundColor: colors.background }}>
+      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 16, paddingHorizontal: props.wide ? 32 : 16, paddingTop: 20, paddingBottom: Math.max(32, safeArea().bottom + 16) }}>
+        <If when={lesson()} else={<Text style={{ fontSize: 14, color: error() ? colors.danger : colors.faint }}>{error() || L("Loading…", "读取中…")}</Text>}>
+          {(l) => (
+            <>
+              <View selectable><Rich text={l().body} /></View>
+              <If when={l().quiz.length}>
+                <Text style={{ fontSize: 17, fontWeight: "600", color: colors.text }}>{L("Self-test", "自测")}</Text>
+                <Each of={l().quiz} key={(c) => c.q}>
+                  {(c, i) => <QuizCardView card={c()} index={i()} />}
+                </Each>
+              </If>
+              <View role="button" testID="study-finish" accessibilityLabel={finished() ? L("Mark as not finished", "标为未学完") : L("Mark as finished", "标为已学完")} onPress={() => toggleStudyDone(props.path)} hoverStyle={hovered()} style={{ alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 0.5, borderColor: surfaceEdge() }}>
+                <Text style={{ fontSize: 14, color: colors.text }}>{finished() ? L("Finished ✓ (undo)", "已学完 ✓（撤销）") : L("Mark as finished", "标为已学完")}</Text>
+              </View>
+            </>
+          )}
+        </If>
+      </View>
+    </Scroll>
+  );
+}
+
 // ---------------------------------------------------------------- commands ("/" in the composer)
 
 /** The commands a "/" draft matches, above the composer. While it shows, Up / Down (and Ctrl+P / Ctrl+N) move the
@@ -3718,6 +3851,8 @@ type Route =
   | { name: "routine"; routine: string }
   | { name: "rules" }
   | { name: "tasks" }
+  | { name: "study" }
+  | { name: "lesson"; path: string }
   | { name: "doc"; path: string };
 const CHANNEL: Route = { name: "channel" };
 
@@ -4403,6 +4538,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       onSettings={openTeam}
       rules={() => { const n = top().name; return n === "rules" || n === "doc"; }}
       onRules={() => openRules()}
+      study={() => { const n = top().name; return n === "study" || n === "lesson"; }}
+      onStudy={() => show({ name: "study" })}
       tasks={() => top().name === "tasks"}
       onTasks={() => show({ name: "tasks" })}
       channels={channels}
@@ -4804,11 +4941,13 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "member": return displayName(r.id);
       case "routine": return r.routine;
       case "rules": return L("Memory", "记忆");
+      case "study": return L("Study", "学习");
+      case "lesson": return studyItems([{ path: r.path }])[0]?.title ?? "";
       case "doc": return r.path.split("/").pop()!.replace(/\.md$/i, "");
     }
   };
   /** The back button's label, the page below's short name. */
-  const backTitle = (r: Route | undefined) => (!r ? "" : r.name === "channel" ? L("Channel", "主会话") : r.name === "team" ? L("Settings", "设置") : r.name === "host" ? L("Machines", "机器") : r.name === "rules" ? L("Memory", "记忆") : r.name === "tasks" ? L("All tasks", "全部任务") : titleOf(r));
+  const backTitle = (r: Route | undefined) => (!r ? "" : r.name === "channel" ? L("Channel", "主会话") : r.name === "team" ? L("Settings", "设置") : r.name === "host" ? L("Machines", "机器") : r.name === "rules" ? L("Memory", "记忆") : r.name === "study" ? L("Study", "学习") : r.name === "tasks" ? L("All tasks", "全部任务") : titleOf(r));
   const below = (r: Route) => { const rs = nav.routes(); const i = rs.indexOf(r); return i > 0 ? rs[i - 1] : undefined; };
   const connPill = () => (
     <View
@@ -4889,6 +5028,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "routine": return <PhoneRoutine name={r.routine} settings={settings} />;
       case "rules": return <RulesList hub={hub} onOpen={(path) => nav.push({ name: "doc", path })} />;
       case "doc": return <RuleDoc hub={hub} path={r.path} wide={wide()} />;
+      case "study": return <StudyList hub={hub} onOpen={(path) => nav.push({ name: "lesson", path })} />;
+      case "lesson": return <StudyLesson hub={hub} path={r.path} wide={wide()} />;
     }
   };
 

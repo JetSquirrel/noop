@@ -69,4 +69,4 @@ test("a fleet day stays under the free-plan target", async () => {
   console.log(`fleet day: ${requests} requests (target ${TARGET.requests}), ~${rowsWritten} rows written (target ${TARGET.rowsWritten})`);
   expect(requests).toBeLessThanOrEqual(TARGET.requests);
   expect(rowsWritten).toBeLessThanOrEqual(TARGET.rowsWritten);
-}, 120_000);
+}, process.platform === "win32" ? 600_000 : 120_000); // wall clock only: ~200 s of file I/O on NTFS with Defender; the budget assertions above are the guard

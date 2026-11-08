@@ -18,7 +18,7 @@ import { type Ev, type FileRow, type ToolStore, type WriteOp, isWrite, listDecis
 /** What the daemon does for each write; injected so tests (and the cloud) can stand in. */
 export type Acts = { [K in WriteOp["tool"]]?: (op: Extract<WriteOp, { tool: K }>) => Promise<Record<string, unknown>> };
 
-export function localStore(o: { acts: Acts; status: () => any; feed: () => { ts: string; [k: string]: any }[]; root?: string }): ToolStore {
+export function localStore(o: { acts: Acts; status: () => any; feed: () => { ts: string; [k: string]: any }[]; root?: string; kbSearch?: ToolStore["kbSearch"] }): ToolStore {
   const root = o.root ?? DATA;
   const row = (abs: string): FileRow => ({ path: relative(root, abs).replaceAll("\\", "/"), text: readFileSync(abs, "utf8"), updated: statSync(abs).mtime.toISOString() });
   const walk = (dir: string): string[] => {
@@ -30,6 +30,7 @@ export function localStore(o: { acts: Acts; status: () => any; feed: () => { ts:
     read: (p) => (safe(p) && existsSync(join(root, p)) && statSync(join(root, p)).isFile() ? row(join(root, p)) : null),
     list: (d) => (safe(d) ? walk(join(root, d)).sort().reverse().slice(0, 2000).map(row) : []),
     status: o.status,
+    kbSearch: o.kbSearch,
     events: (after, limit) => o.feed().map((ev, i) => ({ seq: i + 1, ev: ev as Ev })).filter((r) => r.seq > after).slice(0, limit),
     lastSeq: () => o.feed().length,
     act: async (op) => {
@@ -181,6 +182,10 @@ How to decide:
   words, not a new task. A task is one conversation: amending a finished one reopens it under the same id. When it is
   waiting on the owner's decision card, the text answers that card. Use create_task with follows=<that task> only for
   clearly separate new work.
+- The owner wants to understand how a project or subject works, its architecture, design or technical approach, or what the
+  agents did in it ("讲讲…", "帮我学…", "…是怎么设计的", "agent 这周做了什么值得学的"): create_task with agent "tutor", title "学习：…",
+  repo set to the project when one is named, and the owner's request in details. A quick factual question is not a lesson: answer it.
+- "我的笔记里…", or a question the owner's own notes would answer: search_kb, and name the notes you used.
 - "记住/以后都这样/记下来" or a standing rule for how the fleet should work: remember it (pick the file that fits;
   agents/<name>/memory.md when it only concerns one agent's kind of work). If it also asks for work, do both.
 - A complaint or change request about a product (Noop, NSH, ...) is work, not a rule: create_task only, never remember it.

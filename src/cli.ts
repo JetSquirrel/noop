@@ -29,7 +29,10 @@ import { runTool } from "../cloud/src/tools";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { adoptCloudUrl, readHubToml } from "./sync";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
-import { CODE, UPDATE_REQUEST, type UpdateState, setUpdateState, updateState, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
+import { diagnose, serviceInstalled, switchPrimary } from "./diagnose";
+import { kbCli, kbConfig, searchKb } from "./kb";
+import { STUDY_MODES, type StudyMode, parseStudyCommand, studyPlace, studyTask } from "./study";
+import { CODE, UPDATE_REQUEST, bashPath, type UpdateState, setUpdateState, updateState, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
 import { accountEnv, accountsStatus, classify, failoverAccount, pendingLoginIds, pickAccount, reportFailure, retryLogins, submitLoginCode } from "./accounts";
 import { channelPrompt, channels, resolveChannels, updateChannel } from "./channels";
 
@@ -59,7 +62,7 @@ export function due(every: string, last: string | undefined, t = new Date()): bo
 export function signalChanged(r: { name: string; signal?: string }, state: Record<string, string>): boolean {
   const key = `${r.name}#signal`;
   // Non-login: the service already carries the user's PATH, and sourcing their profile can cost seconds (conda, etc.).
-  const res = Bun.spawnSync(["bash", "-c", r.signal!], { cwd: existsSync(ROOT) ? ROOT : undefined, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  const res = Bun.spawnSync([bashPath(), "-c", r.signal!], { cwd: existsSync(ROOT) ? ROOT : undefined, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
   if (res.exitCode !== 0) return true;
   const hash = new Bun.CryptoHasher("sha1").update(res.stdout).digest("hex");
   if (state[key] === hash) return false;
@@ -380,6 +383,9 @@ async function drainAndExit(why: string, host: string) {
       await _commitPush(`[${host}] ${why}`, { force: true });
     });
   } catch {}
+  // systemd and launchd restart a daemon that exits; Windows' Task Scheduler does not, so it starts its own successor
+  if (process.platform === "win32" && why !== "stop")
+    Bun.spawn([process.execPath, Bun.main, "daemon"], { stdio: ["ignore", "ignore", "ignore"], detached: true, windowsHide: true }).unref();
   process.exit(0);
 }
 
@@ -508,7 +514,7 @@ export async function checkWaits(now = Date.now(), everyMs?: number): Promise<Se
   }
   await Promise.all(due.map(async ([id, cmd, path]) => {
     // Non-login: the service already carries the user's PATH, and sourcing their profile can cost seconds (conda, etc.).
-    const proc = Bun.spawn(["bash", "-c", cmd], { stdout: "ignore", stderr: "ignore", cwd: homedir() });
+    const proc = Bun.spawn([bashPath(), "-c", cmd], { stdout: "ignore", stderr: "ignore", cwd: homedir() });
     const timer = setTimeout(() => proc.kill(), 60_000);
     const code = await proc.exited;
     clearTimeout(timer);
@@ -792,8 +798,10 @@ async function daemon(cfg: Cfg) {
     const cont = prevFile && prev ? `\nThis continues ${prev} (${prevFile.split("/").slice(-2, -1)[0]}): read tasks/${prevFile.split("/").slice(-2).join("/")} for what was done and how. If the owner is correcting that result, fix it; if they say to remember something ("记录下来", "以后都这样"), write it as a durable rule/memory for the agent and kind of work it concerns, not just in this task.\n` : "";
     // said inside a channel: the task belongs to it and its results go back there
     const assignedChannels = [...new Set([...(m?.channel ? [m.channel] : []), ...resolveChannels(op.channels)])].join(",");
-    const id = newTask(op.title.slice(0, 80), `${asked}${op.details ? `\n## What the chat understood\n${op.details}\n` : ""}${op.repo ? `\nRepo: ${op.repo}\n` : ""}${context}${cont}\nHandle it like a capable chief of staff (see your profile: "Owner requests").`,
-      { agent: op.agent ?? "lead", source: m ? "owner@chat" : "owner@mcp", priority: "high", extra: { origin: "owner", ...(m?.channel ? { origin_channel: m.channel } : {}), ...(assignedChannels ? { channels: assignedChannels } : {}), ...(op.repo ? { repo: op.repo } : {}), ...(prevFile && prev ? { follows: prev } : {}) } });
+    const place = op.agent === "tutor" ? studyPlace(loadConfig(), op.repo, host) : {};
+    const repo = place.repo ?? op.repo;
+    const id = newTask(op.title.slice(0, 80), `${asked}${op.details ? `\n## What the chat understood\n${op.details}\n` : ""}${repo ? `\nRepo: ${repo}\n` : ""}${context}${cont}\nHandle it like a capable chief of staff (see your profile: "Owner requests").`,
+      { agent: op.agent ?? "lead", source: m ? "owner@chat" : "owner@mcp", priority: "high", ...(place.host ? { host: place.host } : {}), ...(place.prefer ? { prefer: place.prefer } : {}), extra: { origin: "owner", ...(m?.channel ? { origin_channel: m.channel } : {}), ...(assignedChannels ? { channels: assignedChannels } : {}), ...(repo ? { repo } : {}), ...(prevFile && prev ? { follows: prev } : {}) } });
     journal(host, `💬 ${id} from owner ${m ? "chat" : "MCP"}${prevFile ? ` (follows ${prev})` : ""}: ${op.title.slice(0, 80)}`);
     await _commitPush(`[${host}] chat ${id}`);
     // plan it now and wake the loop, so an idle machine starts it within seconds instead of after the next tick or two
@@ -802,6 +810,7 @@ async function daemon(cfg: Cfg) {
   });
   const store = localStore({
     status: hubStatus, feed: () => feed("", 2000),
+    ...(kbConfig(cfg) ? { kbSearch: (q: string, n: number) => { const kb = kbConfig(loadConfig()); return kb ? searchKb(kb, q, n) : []; } } : {}),
     acts: {
       ...dataActs(host),
       // said on a task's page: it stays in that conversation, however the model read it
@@ -829,6 +838,15 @@ async function daemon(cfg: Cfg) {
     const m = { text, replyTo: reply, answered, chat: recentChat(text, { channel }), sentAt, ...(room ? { channel: { slug: room.slug, name: room.name, goal: room.goal } } : {}) };
     chatNow = { text, chat: m.chat, reply, thread, channel: room?.slug };
     const post = (r: string, ref?: string) => appendEvent({ from: "hub", kind: "system", text: r.slice(0, 2000), ...(ref ? { ref } : {}), ...(thread ? { thread } : {}), ...(room ? { channel: room.slug } : {}) });
+    const lesson = parseStudyCommand(text);
+    if (lesson) { // the app's study page: a fixed format, so no model has to read it
+      try {
+        const t = studyTask(loadConfig(), lesson, host);
+        const r = await store.act({ tool: "create_task", title: t.title, details: t.body, agent: "tutor", ...(lesson.project ? { repo: lesson.project } : {}) } as any);
+        post(r.ok ? `已安排 ${r.id}：${t.title}。讲义写好后会出现在“学习”里。` : `没能安排这次学习：${r.error ?? "未知原因"}`, r.ok ? String(r.id) : undefined);
+      } finally { chatNow = null; }
+      return;
+    }
     let out: BrainOut;
     try {
       out = await think(m, store, model, post);
@@ -863,9 +881,11 @@ async function daemon(cfg: Cfg) {
   process.on("unhandledRejection", (e) => console.error("unhandled rejection", e));
   process.on("uncaughtException", (e) => console.error("uncaught exception", e));
   let lastUpdate = 0, failures = 0;
+  const startedPrimary = isPrimary(cfg, host); // the bridge, server and chat brain are only started for the role held at startup
   for (;;) {
     const c = loadConfig();
     if (adoptCloudUrl(c.cloud?.url)) journal(host, `☁️ hub moved: now syncing with ${c.cloud.url}`);
+    if (!draining && isPrimary(c, host) !== startedPrimary) void drainAndExit(`primary is now ${c.fleet?.primary}`, host);
     if (existsSync(RESTART_FLAG())) { // `hub restart` (throttled) / `hub restart --force`
       const force = readFileSync(RESTART_FLAG(), "utf8").includes("force");
       if (restartAllowed(force)) { unlinkSync(RESTART_FLAG()); void drainAndExit("restart", host); }
@@ -889,10 +909,16 @@ async function daemon(cfg: Cfg) {
 
 async function status(cfg: Cfg, brief = false) {
   if (brief) { // what a person wants to see right after installing
-    const url = cfg.cloud?.url;
+    const url = readHubToml().cloud?.url ?? cfg.cloud?.url;
+    if (!readHubToml().server?.token) {
+      console.log(`  ✗ ${hostName(cfg)} has not joined your team yet. Run: noop init <your-noop-url>`);
+      process.exitCode = 1;
+      return;
+    }
     const hosts = onlineHosts(cfg).map((h) => h.host);
-    console.log(`  ✓ ${hostName(cfg)} is part of your team${hosts.length > 1 ? ` (${hosts.length} machines online)` : ""}`);
-    if (url) console.log(`\n  Open ${url}\n  and sign in with the code sent to your email.`);
+    console.log(`  ✓ ${hostName(cfg)} has joined your team${hosts.length > 1 ? ` (${hosts.length} machines online)` : ""}`);
+    if (!serviceInstalled()) console.log("  ! the background service is not installed, so this machine will not appear online. Details: noop doctor");
+    if (url) console.log(`\n  Open ${url}\n  and sign in with the code sent to your email and your authenticator app.`);
     return;
   }
   // the server this machine actually syncs with is noop.toml's; the shared config only proposes one (adopted next tick)
@@ -932,7 +958,11 @@ const HELP = `Noop — your own AI team
   noop install                run as a service (systemd / launchd / Task Scheduler)
   noop update                 self-update framework now (also automatic in daemon)
   noop fix ["what is wrong"]  AI medic: diagnose & repair this install (auto-runs on install/update/daemon failures)
-  noop doctor                 check dependencies (agents, gh, headless GUI tools)
+  noop doctor                 check dependencies, the connection, the service, the primary and the knowledge base
+  noop primary <host> [--force]   make another machine the primary (for when the current one is gone)
+  noop kb setup <siyuan-dir> [--notebooks 知识库,Inbox]   give this machine a knowledge base (notes never leave it)
+  noop kb index [--full] · noop kb search "words" [--json] [-n 8] · noop kb show <id> · noop kb status
+  noop study "topic" [-p project] [-m auto|architecture|design|tech|activity]   the tutor writes a lesson from the code and your notes
   noop visual …               headless display for GUI testing: start/run/shot/record/input/stop
 
   noop daemon                 run forever (tick every host.tick_seconds)
@@ -966,7 +996,27 @@ async function main() {
     }
     case "install": return install();
     case "visual": return visual(rest);
-    case "doctor": return doctor();
+    case "doctor": await doctor(); return diagnose(cfg);
+    case "kb": return kbCli(cfg, rest);
+    case "primary": {
+      const force = rest.includes("--force"), target = rest.find((a) => !a.startsWith("-"));
+      if (!target) { console.error("usage: noop primary <host> [--force]"); process.exitCode = 1; return; }
+      return switchPrimary(cfg, target, force);
+    }
+    case "study": {
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { project: { type: "string", short: "p" }, mode: { type: "string", short: "m" } } });
+      const mode = (values.mode ?? "auto") as StudyMode;
+      if (!STUDY_MODES.includes(mode)) { console.error(`mode must be one of: ${STUDY_MODES.join(", ")}`); process.exitCode = 1; return; }
+      const topic = positionals.join(" ");
+      if (!topic && !values.project) { console.error('usage: noop study "topic" [-p project] [-m mode]'); process.exitCode = 1; return; }
+      await pull();
+      const t = studyTask(cfg, { topic, project: values.project, mode }, host);
+      const id = newTask(t.title, t.body, { agent: t.agent, repo: t.repo, host: t.host, prefer: t.prefer, source: `owner@${host}`, priority: "high", extra: { origin: "owner" } });
+      journal(host, `🎓 ${id} ${t.title}`);
+      await commitPush(`[${host}] study ${id}`);
+      console.log(`${id}: the lesson will be in reports/study/ and the app's 学习 page`);
+      return;
+    }
     case "fix": {
       const what = rest.join(" ") || "Run a health check (hub doctor, hub status, service logs, bun test) and fix whatever is broken.";
       const r = await medic(what, cfg, { kind: "manual" });

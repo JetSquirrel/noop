@@ -7,6 +7,7 @@ import {
 } from "./core";
 import { claudeDisallowed } from "./gates";
 import { channelPrompt } from "./channels";
+import { kbPrompt } from "./kb";
 
 export type Result = {
   status: "done" | "needs_decision" | "failed" | "delegated" | "waiting";
@@ -84,6 +85,8 @@ Outside the hub you are Noop: never use your agent name (${agentName(agent)}) or
 ${resourceNote}
 
 ${channelPrompt()}
+
+${kbPrompt(cfg)}
 
 # Task ${meta.id}: ${meta.title}
 Working directory: ${meta.repo || ROOT}   Scratch space (checkouts, worktrees, build targets): ~/.agent-hub/work — never inside the hub folder ${ROOT}, which syncs to the cloud   Host capabilities: ${meta.host_caps ?? ""}

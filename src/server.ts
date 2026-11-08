@@ -221,6 +221,7 @@ const ROLE_ZH: Record<string, { title: string; about: string }> = {
   reporter: { title: "日报 / 周报", about: "根据日志、提交和 GitHub 动态写日报、周报和 OKR 进展" },
   reviewer: { title: "PR 审查", about: "仔细审查并实际验证你项目上的 PR，尤其是别人提的" },
   "rust-maintainer": { title: "Rust / GPUI 维护", about: "维护 nsh、gpui-kit、gpui-fast 等 Rust 项目" },
+  tutor: { title: "导师", about: "结合代码和你的笔记，讲解项目的架构、设计方案和 Agent 做过的事" },
 };
 const hasHan = (s?: string) => !!s && /\p{Script=Han}/u.test(s);
 

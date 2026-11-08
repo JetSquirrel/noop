@@ -4,7 +4,7 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"  # the progress bar slows downloads down a lot
 
-$Base = if ($env:NOOP_CLIENT_BASE_URL) { $env:NOOP_CLIENT_BASE_URL } else { "https://github.com/huacnlee/noop/releases/latest/download" }
+$Base = if ($env:NOOP_CLIENT_BASE_URL) { $env:NOOP_CLIENT_BASE_URL } else { "https://github.com/JetSquirrel/noop/releases/latest/download" }
 $Asset = "noop-windows-x86_64.zip"
 $Dir = Join-Path $env:LOCALAPPDATA "Programs\Noop"
 $Work = Join-Path ([IO.Path]::GetTempPath()) ("noop-" + [IO.Path]::GetRandomFileName())
