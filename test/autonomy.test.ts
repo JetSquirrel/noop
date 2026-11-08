@@ -142,3 +142,39 @@ test("built-in routines: every config has security-check (read-only, each machin
   expect(r[0].builtin).toBeUndefined();
   rmSync(P("config.toml"));
 });
+
+const codexHost = { caps: ["os:macos", "cli:claude", "cli:codex"] };
+const claudeHost = { caps: ["os:windows", "cli:claude"] };
+
+test("plannedCli only records Codex when an online host has it", () => {
+  expect(core.plannedCli("codex", [claudeHost])).toBe("claude");
+  expect(core.plannedCli("codex", [claudeHost, codexHost])).toBe("codex");
+  expect(core.plannedCli("claude", [codexHost])).toBe("claude");
+  expect(core.plannedCli(undefined, [])).toBe("claude");
+});
+
+test("cliPinStranded releases only pins no online host can serve, after the grace period", () => {
+  const grace = 20 * 60_000;
+  const old = { cli: "codex", created: ago(30) };
+  expect(core.cliPinStranded(old, [claudeHost], grace)).toBe(true);
+  expect(core.cliPinStranded(old, [claudeHost, codexHost], grace)).toBe(false);
+  expect(core.cliPinStranded(old, [], grace)).toBe(false); // no heartbeats in view: not evidence the CLI is missing
+  expect(core.cliPinStranded({ cli: "codex", created: ago(5) }, [claudeHost], grace)).toBe(false);
+  expect(core.cliPinStranded({ cli: "auto", created: ago(30) }, [claudeHost], grace)).toBe(false);
+  expect(core.cliPinStranded({ cli: "codex", created: "not a date" }, [claudeHost], grace)).toBe(false);
+});
+
+test("metrics do not count superseded routine copies as rejections", async () => {
+  const { computeMetrics } = await import("../src/metrics");
+  mkdirSync(P("fleet"), { recursive: true });
+  writeDoc(P("tasks", "rejected", "T-0001.md"), { id: "T-0001", approval: "superseded:T-0002" }, "x");
+  writeDoc(P("tasks", "rejected", "T-0003.md"), { id: "T-0003", approval: "rejected:P-0001" }, "x");
+  expect(computeMetrics().proposals_rejected_total).toBe(1);
+});
+
+test("proposal batches are not precedents", () => {
+  writeDoc(P("decisions", "closed", "D-0001.md"), { id: "D-0001", agent: "lead", question: "Merge?", answer: "A", answered_by: "owner(chat)" }, "x");
+  writeDoc(P("decisions", "closed", "P-0001.md"), { id: "P-0001", kind: "proposals", question: "要做哪几项？", answer: "none", answered_by: "owner(chat)" }, "x");
+  expect(core.precedents()).toContain("D-0001 [lead] Q: Merge?");
+  expect(core.precedents()).not.toContain("P-0001");
+});

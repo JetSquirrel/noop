@@ -32,7 +32,7 @@ import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, ro
 import { diagnose, serviceInstalled, switchPrimary } from "./diagnose";
 import { kbCli, kbConfig, searchKb } from "./kb";
 import { STUDY_MODES, type StudyMode, parseStudyCommand, studyPlace, studyTask } from "./study";
-import { CODE, UPDATE_REQUEST, bashPath, type UpdateState, setUpdateState, updateState, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
+import { CODE, UPDATE_REQUEST, bashPath, type UpdateState, setUpdateState, updateState, allowedClis, capOk, cliPinStranded, idTagFor, isPrimary, plannedCli, runningRev, setApprovalGate, setIdTag } from "./core";
 import { accountEnv, accountsStatus, classify, failoverAccount, pendingLoginIds, pickAccount, reportFailure, retryLogins, submitLoginCode } from "./accounts";
 import { channelPrompt, channels, resolveChannels, updateChannel } from "./channels";
 
@@ -320,10 +320,17 @@ function reapStale(cfg: Cfg, host: string, ownOnly = false) {
 
 /** Tasks whose hard requirements no online host satisfies: note once, never block the queue.
  *  A pin to one machine (host:X) is a preference once X has been offline for a while: if an online host meets
- *  every other requirement (os, cli…), the pin becomes `prefer` so the task moves to another machine. */
+ *  every other requirement (os, cli…), the pin becomes `prefer` so the task moves to another machine.
+ *  A pin to a CLI no online host has is released the same way, or the task and its routine would wait forever. */
 function noteUnservable(cfg: Cfg, host: string) {
   const hosts = onlineHosts(cfg);
   const graceMs = (cfg.fleet?.host_pin_wait_minutes ?? 20) * 60_000;
+  for (const p of list(P("tasks", "inbox"), /^T-.*\.md$/)) {
+    const { meta, body } = readDoc(p);
+    if (!cliPinStranded(meta, hosts, graceMs)) continue;
+    writeDoc(p, { ...meta, cli: "auto" }, body);
+    journal(host, `🔀 ${meta.id} 指定的 ${meta.cli} 在所有在线机器上都没有安装，改用其他可用的 CLI`);
+  }
   for (const p of list(P("tasks", "inbox"), /^T-.*\.md$/)) {
     const { meta, body } = readDoc(p);
     const reqs = (meta.requires ?? "").split(",").map((x) => x.trim()).filter(Boolean);
@@ -664,7 +671,8 @@ const nap = (ms: number) => Promise.race([Bun.sleep(ms), new Promise<void>((r) =
 async function planNow(cfg: Cfg, host: string) {
   const todo = list(P("tasks", "inbox"), /^T-.*\.md$/).map((p) => ({ p, ...readDoc(p) })).filter((t) => !t.meta.planned).slice(0, 12);
   if (!todo.length) return;
-  const hosts = onlineHosts(cfg).map((h) => `- ${h.host}: ${h.caps.join(",")}`).join("\n");
+  const online = onlineHosts(cfg);
+  const hosts = online.map((h) => `- ${h.host}: ${h.caps.join(",")}`).join("\n");
   const r = await quickAsk(`You place tasks for an AI agent fleet running on several machines.
 For each task decide:
 - channels: zero to three slugs from the channel goals below, or {"name":"...","goal":"..."} for a new work topic.
@@ -691,10 +699,11 @@ Reply with exactly one fenced json block: {"<task id>": {"requires": "", "cli": 
       if (!v || !existsSync(t.p)) continue;
       const req = [...new Set([...(t.meta.requires ?? "").split(","), ...String(v.requires ?? "").split(",")].map((x) => x.trim()).filter(Boolean))].join(",");
       const pinned = t.meta.cli && t.meta.cli !== "auto";
+      const cli = pinned ? t.meta.cli : plannedCli(v.cli, online);
       const channelSlugs = [...new Set([...(t.meta.channels ?? "").split(",").filter(Boolean), ...resolveChannels(v.channels)])].join(",");
-      writeDoc(t.p, { ...readDoc(t.p).meta, channels: channelSlugs, requires: req, ...(pinned ? {} : { cli: v.cli === "codex" ? "codex" : "claude" }),
+      writeDoc(t.p, { ...readDoc(t.p).meta, channels: channelSlugs, requires: req, cli,
         ...(v.difficulty === "hard" ? { difficulty: "hard" } : {}), planned: now() }, t.body);
-      journal(host, `🧭 ${t.meta.id} planned: ${req || "any host"} · ${pinned ? t.meta.cli : v.cli}`);
+      journal(host, `🧭 ${t.meta.id} planned: ${req || "any host"} · ${cli}`);
     }
     await _commitPush(`[${host}] plan ${todo.length} tasks`);
   });

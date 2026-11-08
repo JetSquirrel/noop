@@ -240,6 +240,18 @@ export function chooseCli(meta: Record<string, string>, cfg: Cfg): string | null
   return allowedClis(meta, cfg).find(which) ?? null;
 }
 
+/** The CLI to record for the planner's choice: Codex only when an online host can run it, or the task could never be claimed. */
+export const plannedCli = (choice: unknown, hosts: { caps: string[] }[]) =>
+  choice === "codex" && hosts.some((h) => h.caps.includes("cli:codex")) ? "codex" : "claude";
+
+/** True when a task has been pinned for at least `graceMs` to a CLI no online host has. Never true with no hosts in view,
+ *  so a heartbeat gap cannot release pins. */
+export function cliPinStranded(meta: Record<string, string>, hosts: { caps: string[] }[], graceMs: number, at = Date.now()): boolean {
+  if (!meta.cli || meta.cli === "auto" || !hosts.length) return false;
+  if (hosts.some((h) => h.caps.includes(`cli:${meta.cli}`))) return false;
+  return at - Date.parse(meta.created ?? "") >= graceMs;
+}
+
 // ------------------------------------------------------------------ fleet presence (heartbeats)
 export type HostBeat = { host: string; caps: string[]; seen: string; busy: number; version: string; stats?: any;
   /** The noop code this host runs: its commit and that commit's page. */ rev?: string; rev_url?: string;
@@ -374,10 +386,9 @@ export const recentJournal = (days = 2) =>
   list(P("journal")).slice(-days).map((p) => readFileSync(p, "utf8").slice(-4000)).join("\n");
 
 export function precedents(n = 30): string {
-  return list(P("decisions", "closed")).slice(-n).map((p) => {
-    const { meta } = readDoc(p);
-    return `- ${meta.id} [${meta.agent}] Q: ${meta.question}\n  → **${meta.answer}** (by ${meta.answered_by})`;
-  }).join("\n");
+  // "which of these tasks?" batches carry an answer like "none" with no question behind it: nothing to follow
+  return list(P("decisions", "closed")).map((p) => readDoc(p).meta).filter((meta) => meta.kind !== "proposals").slice(-n)
+    .map((meta) => `- ${meta.id} [${meta.agent}] Q: ${meta.question}\n  → **${meta.answer}** (by ${meta.answered_by})`).join("\n");
 }
 
 export function signature(agent: string, host: string, cfg: Cfg) {
