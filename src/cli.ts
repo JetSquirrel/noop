@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // hub — CLI + daemon for the agent fleet.
+import { guestCmd } from "./guest";
 import { $ } from "bun";
 import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -637,7 +638,7 @@ export async function tick(cfg: Cfg, background = false) {
     const active = await claim(t, host);
     if (!active) { if (tried.has(t)) break; tried.add(t); continue; } // e.g. offline: don't spin on the same task
     running++;
-    const tid = readDoc(active).meta.id;
+    const tid = basename(active, ".md");
     runningIds.add(tid);
     const job = processTask(active, cfg, host)
       .catch((e) => { console.error(e); journal(host, `💥 worker crashed on ${active}: ${e}`); })
@@ -977,11 +978,14 @@ const HELP = `Noop — your own AI team
   noop notify "text"          test Slack/Discord
   noop security [--json]      check this Noop deployment (2FA, sessions, OAuth clients, allow-lists) and this machine's Noop setup
   noop 2fa setup              bind (or re-bind) the authenticator app every sign-in requires; noop 2fa confirm <code> · noop 2fa status
+  noop guest join <url> <code> · run · install · uninstall   low-trust guest worker for shared machines (no memory, no machine key)
+  noop guest invite <label> · list · assign <G-id> <T-id> · results [--ack] · revoke <G-id>   (primary side)
   noop revoke-sessions        security valve: sign out every phone, browser and MCP connector at once (machines keep working)
 `;
 
 async function main() {
   const [cmd, ...rest] = Bun.argv.slice(2);
+  if (cmd === "guest") return guestCmd(rest, loadConfig); // a guest machine has no hub config at all
   const cfg = loadConfig();
   setApprovalGate((src) => needsApproval(loadConfig(), src));
   setIdTag(idTagFor(cfg, hostName(cfg))); // every id minted on a non-primary host carries its tag (T-M0001)
@@ -1029,7 +1033,7 @@ async function main() {
       return void console.log(force ? "noop restarts as soon as its running tasks finish"
         : "noop restarts once its running tasks finish (at most once per hour; --force to skip the limit)");
     }
-    case "update": return void console.log((await selfUpdate()) ? "updated" : "up to date");
+    case "update": return void console.log((await selfUpdate({ force: true })) ? "updated" : "up to date"); // asked by a person: retry even a release this host rejected
     case "daemon": return daemon(cfg);
     case "tick": return tick(cfg);
     case "add": {
