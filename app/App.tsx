@@ -1886,6 +1886,8 @@ function Sidebar(props: {
   onRules: () => void;
   study: () => boolean;
   onStudy: () => void;
+  kb: () => boolean;
+  onKb: () => void;
   tasks: () => boolean;
   onTasks: () => void;
   channels: Channels;
@@ -1978,6 +1980,10 @@ function Sidebar(props: {
             <SideRow onPress={props.onStudy} selected={props.study()} title={L("Study", "学习")}>
               <Icon name="document" size={17} tint={props.study() ? colors.text : colors.muted} />
               <Text style={rowText()}>{L("Study", "学习")}</Text>
+            </SideRow>
+            <SideRow onPress={props.onKb} selected={props.kb()} title={L("Knowledge base", "知识库")}>
+              <Icon name="search" size={17} tint={props.kb() ? colors.text : colors.muted} />
+              <Text style={rowText()}>{L("Knowledge base", "知识库")}</Text>
             </SideRow>
           </View>
           <SideHeading title={L("Needs your decision", "待你决定")} count={waits().length || undefined} accent />
@@ -3665,6 +3671,42 @@ function StudyList(props: { hub: Hub; onOpen: (path: string) => void }) {
   );
 }
 
+/** 知识库: the machines holding the owner's notes. Notes never leave those machines, so a search is asked in the channel, where search_kb answers it. */
+function KnowledgeBase(props: { hub: Hub; onAsked: () => void }) {
+  const query = signal("");
+  const note = signal("");
+  const hosts = () => (props.hub.status()?.hosts ?? []).filter((h) => h.caps.includes("kb"));
+  const search = async () => {
+    const q = query().trim();
+    if (!q) { note.set(L("Say what to look for.", "写下要搜的内容。")); return; }
+    try {
+      await props.hub.send(`在我的笔记里搜：${q}`, null);
+      query.set("");
+      props.onAsked();
+    } catch (e) { note.set(String((e as Error)?.message ?? e)); }
+  };
+  return (
+    <Grouped testID="kb">
+      <Section title={L("Search notes", "搜索笔记")}>
+        <View style={{ padding: 16 }}>
+          <Field label={L("Words to search for", "关键词")} value={query()} onChange={(v) => query.set(v)} onSubmit={search} testID="kb-query" />
+        </View>
+        <SetRow label={L("Search", "搜索")} chevron disabled={!hosts().length} onPress={() => void search()} testID="kb-search" />
+      </Section>
+      <If when={note()}>
+        <Text testID="kb-note" style={{ paddingHorizontal: 32, fontSize: 13, color: colors.muted }}>{note()}</Text>
+      </If>
+      <Section title={L("Machines", "机器")} testID="kb-hosts">
+        <If when={hosts().length} else={<SetRow first label={L("No machine has notes connected", "还没有机器接入笔记")} detail="noop kb setup <siyuan-dir>" disabled />}>
+          <Each of={hosts()} key={(h) => h.host}>
+            {(h, i) => <SetRow first={i() === 0} label={h().host} value={L("Online", "在线")} />}
+          </Each>
+        </If>
+      </Section>
+    </Grouped>
+  );
+}
+
 function QuizCardView(props: { card: QuizCard; index: number }) {
   const open = signal(false);
   return (
@@ -3853,6 +3895,7 @@ type Route =
   | { name: "tasks" }
   | { name: "study" }
   | { name: "lesson"; path: string }
+  | { name: "kb" }
   | { name: "doc"; path: string };
 const CHANNEL: Route = { name: "channel" };
 
@@ -4540,6 +4583,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       onRules={() => openRules()}
       study={() => { const n = top().name; return n === "study" || n === "lesson"; }}
       onStudy={() => show({ name: "study" })}
+      kb={() => top().name === "kb"}
+      onKb={() => show({ name: "kb" })}
       tasks={() => top().name === "tasks"}
       onTasks={() => show({ name: "tasks" })}
       channels={channels}
@@ -4943,6 +4988,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "rules": return L("Memory", "记忆");
       case "study": return L("Study", "学习");
       case "lesson": return studyItems([{ path: r.path }])[0]?.title ?? "";
+      case "kb": return L("Knowledge base", "知识库");
       case "doc": return r.path.split("/").pop()!.replace(/\.md$/i, "");
     }
   };
@@ -5030,6 +5076,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "doc": return <RuleDoc hub={hub} path={r.path} wide={wide()} />;
       case "study": return <StudyList hub={hub} onOpen={(path) => nav.push({ name: "lesson", path })} />;
       case "lesson": return <StudyLesson hub={hub} path={r.path} wide={wide()} />;
+      case "kb": return <KnowledgeBase hub={hub} onAsked={() => openScope(null)} />;
     }
   };
 
