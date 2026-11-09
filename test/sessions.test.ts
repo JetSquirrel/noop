@@ -28,6 +28,15 @@ test("redact: assignments keep the name and drop the value", () => {
   expect(redact("API_KEY：" + body(12))).toBe("API_KEY：[REDACTED]");
   expect(redact("password='two words'")).toBe("password=[REDACTED]");
   expect(redact("token: [REDACTED]")).toBe("token: [REDACTED]");
+  expect(redact('"password": "a\\"b c"')).toBe('"password": [REDACTED]');
+});
+
+test("redact: a huge unbroken run stays fast", () => {
+  for (const s of ["x".repeat(300_000), "a.".repeat(150_000)]) {
+    const start = performance.now();
+    expect(redact(s)).toBe("[REDACTED]");
+    expect(performance.now() - start).toBeLessThan(2000);
+  }
 });
 
 test("redact: credentials in headers and URLs", () => {

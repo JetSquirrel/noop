@@ -38,10 +38,10 @@ const SECRET = [
   /\b(AIza[\w-]{30,})/g, /\b(AQ\.[\w.-]{20,})/g, /\b(ya29\.[\w.-]{20,})/g, /\b(GOCSPX-[\w-]{15,})/g, // Google: API keys (old and new format), OAuth
   /\b((?:AKIA|ASIA)[0-9A-Z]{16})\b/g, /\b(eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})/g, /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
   /\bBearer\s+[\w.~+\/-]{16,}=*/g, /\b[a-z][a-z0-9+.-]*:\/\/[^\s:\/@]+:[^\s\/@]+@/gi,
-  /((?:password|passwd|secret|token|api[_-]?key|access[_-]?key)["']?\s*[:=：]\s*)(?:"[^"\n]*"|'[^'\n]*'|\S+)/gi, /\b[0-9a-f]{32,}\b/gi,
+  /((?:password|passwd|secret|token|api[_-]?key|access[_-]?key)["']?\s*[:=：]\s*)(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\S+)/gi, /\b[0-9a-f]{32,}\b/gi,
 ];
 export function redact(s: string): string {
-  let out = s;
+  let out = s.replace(/[\w.+-]{2000,}/g, "[REDACTED]"); // not prose, and the email and URL patterns go quadratic on it
   for (const re of SECRET) out = out.replace(re, (_m, g1) => (typeof g1 === "string" && /[:=：]\s*$/.test(g1) ? `${g1}[REDACTED]` : "[REDACTED]"));
   return out.replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, "[email]");
 }
