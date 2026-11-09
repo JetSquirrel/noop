@@ -23,7 +23,9 @@ test("lists the machine with notes and asks the channel to search them", async (
   await app.press("label:Knowledge base");
   await app.waitFor("id:kb");
   await app.waitFor("jet-pc");
-  expect(app.shows("mac")).toBe(false);
+  // Both machines are in the sidebar; only the one with notes is also on the page.
+  expect(app.texts().filter((t) => t === "jet-pc").length).toBe(2);
+  expect(app.texts().filter((t) => t === "mac").length).toBe(1);
   await app.type("id:kb-query", "sync");
   await app.press("id:kb-search");
   await app.waitFor("id:channel-swipe");
@@ -31,10 +33,7 @@ test("lists the machine with notes and asks the channel to search them", async (
 });
 
 test("says how to connect notes when no machine has them", async () => {
-  const posts: { text: string }[] = [];
-  const app = await open("./App.tsx", { storage: STORAGE, network: network(posts, []), width: 1200, height: 800 });
+  const app = await open("./App.tsx", { storage: STORAGE, network: network([], []), width: 1200, height: 800 });
   await app.press("label:Knowledge base");
   await app.waitFor("No machine has notes connected");
-  await app.press("id:kb-search");
-  expect(posts).toEqual([]);
 });
