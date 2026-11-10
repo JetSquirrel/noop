@@ -18,8 +18,8 @@ your Noop deployment.
    10 minutes, as install lines for Windows and macOS/Linux.
 2. On the shared machine, in the account that will run it, paste the line for its OS. It installs bun and Noop and
    joins as the guest, with no owner login and no machine key:
-   - Windows (PowerShell): `$env:NOOP_GUEST = "<url> <code>"; irm https://huacnlee.github.io/noop/install.ps1 | iex`
-   - macOS / Linux: `curl -fsSL https://huacnlee.github.io/noop/install.sh | bash -s -- --guest <url> <code>`
+   - Windows (PowerShell): `$env:NOOP_GUEST = "<url> <code>"; irm https://raw.githubusercontent.com/JetSquirrel/noop/main/install.ps1 | iex`
+   - macOS / Linux: `curl -fsSL https://raw.githubusercontent.com/JetSquirrel/noop/main/install.sh | bash -s -- --guest <url> <code>`
    - Noop already installed: `noop guest join <url> <code>`
 
    The install lines also start the guest as a per-account background service (systemd user unit, launchd agent, or
