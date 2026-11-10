@@ -1,5 +1,7 @@
 # Noop installer (Windows):  irm https://raw.githubusercontent.com/JetSquirrel/noop/main/install.ps1 | iex
 # The first machine, once:   $env:NOOP_INIT_ARGS = "--primary"; irm <same url> | iex
+# A guest on a shared machine: $env:NOOP_GUEST = "<noop-url> <code>"; irm <same url> | iex
+#                              (the line `noop guest invite <label>` prints; no login, no machine key)
 $ErrorActionPreference = "Stop"
 $HomeDir = if ($env:NOOP_HOME) { $env:NOOP_HOME } elseif ((Test-Path "$HOME\.agent-hub") -and -not (Test-Path "$HOME\.noop")) { "$HOME\.agent-hub" } else { "$HOME\.noop" }
 $App = "$HomeDir\app"
@@ -29,16 +31,39 @@ Write-Host "`nNoop - your own AI team`n"
 if (Test-Path "$HOME\.bun\bin\bun.exe") { $env:Path += ";$HOME\.bun\bin" }  # installed earlier, this window just predates its PATH entry
 Step "bun"
 if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-  Run { irm bun.sh/install.ps1 | iex }
+  # bun's installer sets "Stop" itself, so it gets a PowerShell of its own where nothing redirects its curl.exe.
+  Run { powershell -NoProfile -ExecutionPolicy Bypass -Command "irm bun.sh/install.ps1 | iex" }
   $env:Path += ";$HOME\.bun\bin"
-  if (-not (Get-Command bun -ErrorAction SilentlyContinue)) { throw "bun did not install" }
+  if (-not (Get-Command bun -ErrorAction SilentlyContinue)) { throw "bun did not install (see $Log)" }
 } else { Run { bun upgrade } }  # an old bun cannot read a newer bun.lock
 Ok (bun --version)
 Step "Noop"
 if (Test-Path "$App\.git") { Run { git -C $App remote set-url origin $Repo; git -C $App pull -q --ff-only }; Check "git pull" } else { Run { git clone -q $Repo $App }; Check "git clone" }
 Push-Location $App; Run { bun install --frozen-lockfile }; $deps = $LASTEXITCODE; Pop-Location
 if ($deps -ne 0) { throw "bun install failed (exit $deps)" }
-Ok
+# the noop command: bin\noop.cmd, on the user's PATH from the next terminal on and in this one now
+$Bin = "$App\bin"
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (-not (($UserPath -split ";") -contains $Bin)) { [Environment]::SetEnvironmentVariable("Path", (@($UserPath, $Bin) | Where-Object { $_ }) -join ";", "User") }
+if (-not (($env:Path -split ";") -contains $Bin)) { $env:Path += ";$Bin" }
+Ok (git -C $App rev-parse --short HEAD)
+
+if ($env:NOOP_GUEST) {
+  # A guest gets its own revocable token and nothing else: no init, no owner login, no fleet data, no service.
+  $Guest = $env:NOOP_GUEST -split "\s+" | Where-Object { $_ }
+  Remove-Item Env:NOOP_GUEST
+  if ($Guest.Count -ne 2) { throw "NOOP_GUEST must be `"<noop-url> <code>`", as printed by noop guest invite" }
+  Step "AI tools"
+  $have = @("claude", "codex") | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }
+  if ($have) { Ok ($have -join ", ") } else { Write-Host "! install claude (or codex) and log in; the guest runs tasks with this account's own login" -ForegroundColor Yellow }
+  Step "guest"
+  Run { bun "$App\src\cli.ts" guest join $Guest[0] $Guest[1] }; Check "guest join"
+  Ok
+  Step "background service"; Run { bun "$App\src\cli.ts" guest install }; Check "guest install"; Ok
+  Write-Host "`n  The guest now runs in the background and at every login of this account (log: ~\.noop-guest\guest.log).`n  Stop it with: noop guest uninstall`n"
+  return
+}
+
 Step "AI tools"
 $missing = @("claude", "codex", "gh") | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
 if ($missing) { Warn "missing: $($missing -join ', ') (install and log in for full capability)" } else { Ok "claude, codex, gh" }
