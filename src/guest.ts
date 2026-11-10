@@ -83,7 +83,7 @@ async function admin(cfg: any, path: string, init: RequestInit = {}) {
   return b as any;
 }
 
-const SITE = "https://huacnlee.github.io/noop";
+const SITE = "https://raw.githubusercontent.com/JetSquirrel/noop/main";
 
 /** What `noop guest invite` prints: one line per OS that installs Noop and joins as this guest, no login. */
 export function guestInvite(url: string, code: string): string {
