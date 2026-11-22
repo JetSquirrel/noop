@@ -187,7 +187,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
       const was = `${acct.cli}/${acct.name}`;
       await locked(async () => {
         await _pull();
-        journal(host, L(`🔀 ${meta.id} ${was} ${failure === "quota" ? "out of quota" : "needs login"}, rerunning here with ${next.cli}/${next.name}`, `🔀 ${meta.id} ${was} ${failure === "quota" ? "额度用完" : "需要登录"}，立即改用 ${next.cli}/${next.name} 在本机重跑`));
+        journal(host, L(`🔀 ${meta.id} ${was} ${failure === "quota" ? "out of quota" : failure === "account" ? "account blocked" : "needs login"}, rerunning here with ${next.cli}/${next.name}`, `🔀 ${meta.id} ${was} ${failure === "quota" ? "额度用完" : failure === "account" ? "账户被停用" : "需要登录"}，立即改用 ${next.cli}/${next.name} 在本机重跑`));
         await _commitPush(`[${host}] ${meta.id} switch to ${next.cli}`);
       });
       acct = next;
