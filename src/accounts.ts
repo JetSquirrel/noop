@@ -81,10 +81,16 @@ export function accountEnv(a: Account): Record<string, string> {
 const QUOTA = /usage limit|rate[ -]?limit|limit reached|quota|credit balance is too low|too many requests|\b429\b|overloaded|hit your .*limit|try again (at|in)/i;
 const AUTH = /not logged in|please run \/login|invalid api key|authentication[_ ]error|\b401\b|oauth token (has )?expired|login required|unauthorized|codex login/i;
 
-export type Failure = "quota" | "auth" | null;
+// The account itself is blocked (billing past due, on hold, suspended): a short wait or a login link for the same
+// account does not fix it, and every task sent to it fails. Park it for hours and tell the owner once a day.
+const ACCOUNT = /account is on hold|claude\.ai\/restricted|payment is past due|can't use your claude subscription|claude\.ai\/settings\/billing|account has been (suspended|disabled)/i;
+const ACCOUNT_PARK_MS = 6 * 3600_000;
+
+export type Failure = "quota" | "auth" | "account" | null;
 
 export function classify(output: string): Failure {
   const tail = output.slice(-4000);
+  if (ACCOUNT.test(tail)) return "account";
   if (AUTH.test(tail)) return "auth";
   if (QUOTA.test(tail)) return "quota";
   return null;
@@ -122,6 +128,19 @@ export async function reportFailure(a: Account, kind: Failure, output: string, c
       void notify([L(`${a.cli === "claude" ? "Claude" : "Codex"} (${host}) is out of quota, back around ${at}.`, `${a.cli === "claude" ? "Claude" : "Codex"}（${host}）额度用完了，约 ${at} 恢复。`),
         others.length ? L(`Until then tasks go to ${others.join(", ")}.`, `这期间任务先交给 ${others.join("、")} 做。`) : L("No AI is available until then, tasks will queue.", "这期间没有可用的 AI，任务会排队等着。"),
         L(`To recover now: run ${a.cli === "claude" ? "claude /login" : "codex login"} on this machine to switch account; it is picked up automatically.`, `想马上恢复：在这台机器上运行 ${a.cli === "claude" ? "claude /login" : "codex login"} 换个账号，登录后会自动接着用，不用等。`)].join("\n"),
+        cfg, { kind: "notice" });
+    }
+  } else if (kind === "account") {
+    st.cooldown_until = new Date(Date.now() + ACCOUNT_PARK_MS).toISOString();
+    journal(host, `⛔ ${key(a)} account blocked → parked until ${st.cooldown_until.slice(11, 16)}Z`);
+    if (!st.told || !(Date.now() - Date.parse(st.told) < 24 * 3600_000)) { // at most once a day while it stays blocked
+      st.told = new Date().toISOString();
+      const name = a.cli === "claude" ? "Claude" : "Codex";
+      const login = a.cli === "claude" ? "claude /login" : "codex login";
+      const why = output.slice(-4000).split("\n").reverse().find((l) => ACCOUNT.test(l))?.trim().slice(0, 200) ?? "";
+      void notify([L(`The ${name} account "${a.name}" on ${host} is blocked, so every task sent to it fails:`, `${host} 上的 ${name} 账户「${a.name}」被停用，派给它的任务都会失败：`),
+        why,
+        L(`Tasks wait in the inbox instead of failing. It is retried every 6 hours, or right away after ${login} on this machine.`, `任务先留在收件箱，不再记为失败。每 6 小时重试一次；在这台机器上运行 ${login} 换号后立即恢复。`)].join("\n"),
         cfg, { kind: "notice" });
     }
   } else {

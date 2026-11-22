@@ -126,6 +126,15 @@ test("quota/auth failover: same CLI's other account, then the other CLI, else no
   expect(failoverAccount(solo, { cli: "codex", name: "zz-test-c", dir: "" }, ["codex", "claude"], all)?.cli).toBe("claude");
 });
 
+test("classify: a blocked account is not quota or login trouble", async () => {
+  const { classify } = await import("../src/accounts");
+  expect(classify("Your account is on hold and can't use Claude Code. View details or appeal: https://claude.ai/restricted")).toBe("account");
+  expect(classify("Claude Code can't use your Claude subscription, usually because a payment is past due · Pay or renew at https://claude.ai/settings/billing (if you just paid, try again shortly), or use an Anthropic API key instead")).toBe("account");
+  expect(classify("Claude usage limit reached. Your limit will reset at 3pm")).toBe("quota");
+  expect(classify("Not logged in · Please run /login")).toBe("auth");
+  expect(classify("cargo test failed: billing module assertion")).toBeNull(); // product code that mentions billing
+});
+
 test("restart throttle: at most one voluntary restart per hour unless forced", async () => {
   const { mkdtempSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
