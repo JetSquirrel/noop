@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { rmSync } from "node:fs";
-import { DATA, P, writeDoc } from "../src/core";
+import { DATA, P, readDoc, writeDoc } from "../src/core";
 import { channelPrompt, channels, createChannel, resolveChannels, updateChannel } from "../src/channels";
 import { context, localStore } from "../src/brain";
 import { channelsView, slugify, writeOp } from "../cloud/src/tools";
@@ -40,6 +40,11 @@ test("view: a channel lists its tasks and their cards newest first, and is stale
   reset();
   createChannel("Omamail", "omamail");
   createChannel("Omasend", "omasend");
+  // createChannel stamps `created: now()`; pin it, or the fixed view dates below stop testing anything once the wall clock passes them
+  for (const s of ["omamail", "omasend"]) {
+    const { meta, body } = readDoc(P("channels", `${s}.md`));
+    writeDoc(P("channels", `${s}.md`), { ...meta, created: "2026-11-07T00:00:00Z" }, body);
+  }
   writeDoc(P("tasks", "done", "T-0001.md"), { id: "T-0001", title: "review omamail #1", channels: "omamail,gone", created: "2026-11-07T01:00:00Z", finished: "2026-11-07T02:00:00Z" }, "x");
   writeDoc(P("tasks", "blocked", "T-0002.md"), { id: "T-0002", title: "merge omamail #2?", channels: "omamail", created: "2026-11-07T03:00:00Z" }, "x");
   writeDoc(P("decisions", "open", "D-0001.md"), { id: "D-0001", task: "T-0002", question: "合并 #2 吗？", created: "2026-11-07T04:00:00Z" }, "x");
@@ -49,7 +54,7 @@ test("view: a channel lists its tasks and their cards newest first, and is stale
   expect(om.items.map((i) => i.id)).toEqual(["D-0001", "T-0002", "T-0001"]);
   expect(om.stale).toBe(false);
   expect(om.count).toBe(3);
-  expect(v.channels.find((c) => c.slug === "omasend")!.stale).toBe(false); // just created
+  expect(v.channels.find((c) => c.slug === "omasend")!.stale).toBe(false); // created one day before the view date
   expect(channelsView(store(), Date.parse("2026-11-20T00:00:00Z")).channels.every((c) => c.stale)).toBe(true);
 });
 
