@@ -26,7 +26,8 @@ export function computeMetrics(days = 7) {
     return [k, { runs: n, success: +(v.done / (n || 1)).toFixed(2), failed: v.failed, blocked: v.blocked, median_minutes: Math.round(med) }];
   }));
   const approvals = list(P("decisions", "closed")).map((p) => readDoc(p).meta).filter((m) => m.kind === "proposals");
-  const rejected = list(P("tasks", "rejected"), /^T-.*\.md$/).length;
+  // a newer run of a routine replacing its unanswered copy is not the owner saying no
+  const rejected = list(P("tasks", "rejected"), /^T-.*\.md$/).filter((p) => !readDoc(p).meta.approval?.startsWith("superseded:")).length;
   const out = {
     shadow_judge: judgeAccuracy(),
     shadow_judge_by_agent: Object.fromEntries(Object.keys(per).map((a) => [a, judgeAccuracy(a)])), proposal_batches: approvals.length, proposals_rejected_total: rejected,
