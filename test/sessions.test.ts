@@ -1,9 +1,9 @@
 // Learn digest: only the owner's own words get in, and secrets never do.
 import { expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ownerText, readClaude, readCodex, redact } from "../src/sessions";
+import { collect, ownerText, readClaude, readCodex, redact } from "../src/sessions";
 
 // Fake values, assembled so the source never holds anything key-shaped.
 const body = (n: number) => "aB3".repeat(n).slice(0, n);
@@ -79,4 +79,33 @@ test("readers: the previous AI message is redacted before it is shortened", () =
   const turns = readCodex(jsonl([codexMsg("assistant", googleNew + " " + "y".repeat(380)), codexMsg("user", "继续做这个功能")]));
   expect(turns).toHaveLength(1);
   expect(turns[0].prev).not.toContain(googleNew.slice(-20));
+});
+
+test("collect: a session touched again replays only its new turns", () => {
+  const dir = mkdtempSync(join(tmpdir(), "noop-collect-"));
+  const f = join(dir, "s.jsonl");
+  // backdate the mtime past the 10-minute live-session skip, a little further each time
+  const write = (rows: unknown[], ageMin: number) => {
+    writeFileSync(f, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    const at = new Date(Date.now() - ageMin * 60_000);
+    utimesSync(f, at, at);
+  };
+  const turn = (text: string, ts: string) => ({ type: "user", timestamp: ts, message: { content: text } });
+  const cfg = { learn: { claude_dir: dir, codex_dir: join(dir, "none") } } as any;
+  write([turn("第一轮的指示", "2026-11-01T00:00:00Z")], 30);
+  const first = collect(cfg);
+  expect(first.file).toBeTruthy();
+  expect(readFileSync(first.file!, "utf8")).toContain("第一轮的指示");
+  // the session file is touched again (mtime moves) with one more turn; the old turn must not come back
+  write([turn("第一轮的指示", "2026-11-01T00:00:00Z"), turn("第二轮的补充", "2026-11-02T00:00:00Z")], 20);
+  const second = collect(cfg);
+  expect(second.file).toBeTruthy();
+  const replay = readFileSync(second.file!, "utf8");
+  expect(replay).toContain("第二轮的补充");
+  expect(replay).not.toContain("第一轮的指示");
+  // a bare number in state.json (the old format) still means "fully seen" and skips the file
+  const st = JSON.parse(readFileSync(join(process.env.NOOP_HOME!, "learn", "state.json"), "utf8"));
+  st[f] = statSync(f).mtimeMs;
+  writeFileSync(join(process.env.NOOP_HOME!, "learn", "state.json"), JSON.stringify(st));
+  expect(collect(cfg).file).toBeNull();
 });

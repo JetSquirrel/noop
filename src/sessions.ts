@@ -132,11 +132,16 @@ export function collect(cfg: Cfg, opts: { full?: boolean; maxChars?: number } = 
   let sessions = 0;
   for (const [tool, f] of files) {
     const m = statSync(f).mtimeMs;
-    if (typeof state[f] === "number" && state[f] >= m) continue;
+    // state[f] holds { m, last }; a bare number is the old mtime-only form, read as "fully seen at that mtime"
+    const st: { m?: number; last?: string } = state[f] && typeof state[f] === "object" ? state[f] : { m: state[f] };
+    if (typeof st.m === "number" && st.m >= m) continue;
     if (Date.now() - m < 10 * 60_000) continue; // skip live sessions
     const project = tool === "claude" ? basename(join(f, "..")).replace(/^-(home|Users)-[^-]+-/, "").replace(/^work-/, "").replace(/--claude-worktrees-.*$/, "") : "";
-    const t = tool === "claude" ? readClaude(f, project) : readCodex(f);
-    state[f] = m;
+    const fresh = tool === "claude" ? readClaude(f, project) : readCodex(f);
+    // a file touched again replays only turns newer than the last one seen, not its whole history
+    const t = st.last ? fresh.filter((x) => x.ts > st.last!) : fresh;
+    const last = fresh.reduce((a, x) => (x.ts > a ? x.ts : a), st.last ?? "");
+    state[f] = last ? { m, last } : { m };
     if (t.length) { sessions++; turns.push(...t); }
   }
   const hubSince = opts.full ? "" : (state.__hub_since as unknown as string) ?? "";
